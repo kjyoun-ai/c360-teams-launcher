@@ -12,16 +12,23 @@
       --muted: #6b7280;
       --bg: #ffffff;
       --border: #e5e7eb;
+      --note-bg: rgba(255, 54, 33, 0.06);
     }
     @media (prefers-color-scheme: dark) {
-      :root { --text: #f3f4f6; --muted: #9ca3af; --bg: #1f2937; --border: #374151; }
+      :root {
+        --text: #f3f4f6;
+        --muted: #9ca3af;
+        --bg: #1f2937;
+        --border: #374151;
+        --note-bg: rgba(255, 54, 33, 0.12);
+      }
     }
     html, body { margin: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: var(--text); background: var(--bg); }
     body { display: flex; flex-direction: column; }
-    #shell { padding: 40px 24px; max-width: 520px; margin: 0 auto; width: 100%; box-sizing: border-box; }
+    #shell { padding: 40px 24px; max-width: 540px; margin: 0 auto; width: 100%; box-sizing: border-box; }
     h1 { font-size: 24px; margin: 0 0 12px; font-weight: 600; }
-    p { font-size: 14px; line-height: 1.6; color: var(--muted); margin: 0 0 24px; }
-    .actions { display: flex; gap: 8px; align-items: center; }
+    p { font-size: 14px; line-height: 1.6; color: var(--muted); margin: 0 0 16px; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
     button {
       padding: 10px 20px; font-size: 14px; font-weight: 500; border: 0; border-radius: 6px;
       background: var(--flexera-red); color: #fff; cursor: pointer; transition: opacity 0.15s;
@@ -35,46 +42,68 @@
       vertical-align: middle; margin-right: 8px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    #status { margin-top: 20px; font-size: 12px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+    .note {
+      font-size: 13px; padding: 10px 12px; background: var(--note-bg);
+      border-left: 3px solid var(--flexera-red); margin: 12px 0; color: var(--text);
+      border-radius: 0 4px 4px 0;
+    }
     .error { color: #dc2626; }
     #frame { flex: 1; width: 100%; border: 0; display: none; }
     .reauth-bar {
       position: fixed; bottom: 12px; right: 12px; padding: 6px 10px; background: rgba(0,0,0,0.7);
       color: #fff; font-size: 11px; border-radius: 4px; cursor: pointer; display: none; z-index: 10;
     }
+    details { margin-top: 28px; font-size: 12px; }
+    details summary { cursor: pointer; color: var(--muted); user-select: none; }
+    details summary:hover { color: var(--text); }
+    #status { margin-top: 8px; font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; color: var(--muted); font-size: 11px; }
     .hidden { display: none !important; }
   </style>
 </head>
 <body>
   <div id="shell">
     <h1 id="title"><span class="spinner"></span>Loading C360 Analyst</h1>
-    <p id="message">Signing you in to Databricks. A popup window will appear shortly. After signing in, the popup will close automatically and the chat will load here.</p>
+    <p id="message">Checking your session&hellip;</p>
+
+    <div class="note hidden" id="popup-instructions">
+      <strong>A sign-in window will appear.</strong> After you sign in to Databricks, <strong>close that window</strong> to return here &mdash; the chat will load automatically.
+    </div>
+
+    <div class="actions hidden" id="landing-actions">
+      <button id="signin">Sign in to Databricks</button>
+      <button class="secondary" id="continue">I&rsquo;m already signed in</button>
+    </div>
+
     <div class="actions hidden" id="error-actions">
       <button id="retry">Retry sign-in</button>
       <button class="secondary" id="open-external">Open in browser</button>
     </div>
-    <div id="status"></div>
+
+    <details>
+      <summary>Diagnostic log</summary>
+      <div id="status"></div>
+    </details>
   </div>
   <iframe id="frame" title="C360 Analyst"></iframe>
   <div class="reauth-bar" id="reauth-bar" title="Sign in again">Re-authenticate</div>
 
   <script>
     const APP_URL = 'https://c360-chat-sandbox-ji-soo-yun-1132449496299224.aws.databricksapps.com/';
-    const AUTH_TTL_MS = 30 * 60 * 1000; // 30 min — skip popup if user authed within this window
-    const VERSION = 'launcher-v1.1.0';
+    const AUTH_TTL_MS = 4 * 60 * 60 * 1000; // 4h — Databricks Apps cookies typically last longer
+    const VERSION = 'launcher-v1.2.0';
 
     const $ = (id) => document.getElementById(id);
-    const setTitle = (t, withSpinner = false) => {
+    const show = (id, visible) => $(id).classList.toggle('hidden', !visible);
+    const setTitle = (t, withSpinner) => {
       $('title').innerHTML = (withSpinner ? '<span class="spinner"></span>' : '') + t;
     };
-    const setMessage = (m, isError = false) => {
+    const setMessage = (m, isError) => {
       $('message').textContent = m;
       $('message').className = isError ? 'error' : '';
     };
-    const showErrorActions = (show) => $('error-actions').classList.toggle('hidden', !show);
     const log = (s) => {
       const t = new Date().toISOString().slice(11, 19);
-      $('status').textContent += (t + ' ' + s + '\n');
+      $('status').textContent += t + ' ' + s + '\n';
       console.log('[launcher]', s);
     };
 
@@ -102,10 +131,20 @@
       $('reauth-bar').style.display = 'block';
     };
 
+    const showLanding = () => {
+      setTitle('Welcome to C360 Analyst', false);
+      setMessage('Sign in to Databricks to start chatting, or skip if you already have an active session.', false);
+      show('landing-actions', true);
+      show('popup-instructions', false);
+      show('error-actions', false);
+    };
+
     const runAuthFlow = () => {
-      setTitle('Signing you in', true);
-      setMessage('Opening Databricks sign-in popup. After you sign in, the popup will close and the chat will load.');
-      showErrorActions(false);
+      setTitle('Opening sign-in window', true);
+      setMessage('Complete the Databricks sign-in in the popup, then close that window.', false);
+      show('landing-actions', false);
+      show('popup-instructions', true);
+      show('error-actions', false);
       log('Opening popup -> ' + APP_URL);
       microsoftTeams.authentication.authenticate({
         url: APP_URL,
@@ -117,19 +156,23 @@
         },
         failureCallback: (reason) => {
           log('Popup closed (failure): ' + (reason || '(no reason)'));
-          // Even on "failure" (user closed manually without notifySuccess), cookies may still be set.
-          // Attempt to load the app — if cookies aren't valid, user can retry.
+          // Even on "failure" (user closed without notifySuccess), cookies may be set.
+          // Attempt to load — if cookies aren't valid, user can hit reauth.
           loadApp();
         }
       });
     };
 
     const showFatalError = (msg) => {
-      setTitle('Couldn\'t load C360 Analyst');
+      setTitle('Couldn\'t load C360 Analyst', false);
       setMessage(msg, true);
-      showErrorActions(true);
+      show('error-actions', true);
+      show('landing-actions', false);
+      show('popup-instructions', false);
     };
 
+    $('signin').onclick = runAuthFlow;
+    $('continue').onclick = loadApp;
     $('retry').onclick = () => { clearAuth(); runAuthFlow(); };
     $('open-external').onclick = () => {
       microsoftTeams.app.openLink(APP_URL).catch(() => window.open(APP_URL, '_blank'));
@@ -139,7 +182,7 @@
       $('frame').style.display = 'none';
       $('shell').classList.remove('hidden');
       $('reauth-bar').style.display = 'none';
-      runAuthFlow();
+      showLanding();
     };
 
     log(VERSION + ' loaded');
@@ -152,10 +195,11 @@
         .then((ctx) => {
           log('Teams ready. host=' + (ctx?.app?.host?.name || '?') + ' client=' + (ctx?.app?.host?.clientType || '?'));
           if (isLikelyAuthenticated()) {
-            log('Recent auth detected — skipping popup.');
+            log('Recent auth detected (TTL valid) — loading app directly.');
             loadApp();
           } else {
-            runAuthFlow();
+            log('No recent auth — showing landing.');
+            showLanding();
           }
         })
         .catch((e) => {
