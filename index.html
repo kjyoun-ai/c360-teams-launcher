@@ -6,74 +6,162 @@
   <title>C360 Analyst</title>
   <script src="https://res.cdn.office.net/teams-js/2.19.0/js/MicrosoftTeams.min.js"></script>
   <style>
-    html, body { margin: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: #222; }
+    :root {
+      --flexera-red: #FF3621;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --bg: #ffffff;
+      --border: #e5e7eb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --text: #f3f4f6; --muted: #9ca3af; --bg: #1f2937; --border: #374151; }
+    }
+    html, body { margin: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: var(--text); background: var(--bg); }
     body { display: flex; flex-direction: column; }
-    #shell { padding: 24px; max-width: 640px; }
-    h1 { font-size: 20px; margin: 0 0 8px; }
-    p { font-size: 14px; line-height: 1.5; color: #555; margin: 0 0 16px; }
-    button { padding: 10px 18px; font-size: 14px; border: 0; border-radius: 6px; background: #FF3621; color: #fff; cursor: pointer; margin-right: 8px; }
-    button:disabled { background: #ccc; cursor: not-allowed; }
-    #status { margin-top: 16px; font-size: 12px; color: #888; white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; }
+    #shell { padding: 40px 24px; max-width: 520px; margin: 0 auto; width: 100%; box-sizing: border-box; }
+    h1 { font-size: 24px; margin: 0 0 12px; font-weight: 600; }
+    p { font-size: 14px; line-height: 1.6; color: var(--muted); margin: 0 0 24px; }
+    .actions { display: flex; gap: 8px; align-items: center; }
+    button {
+      padding: 10px 20px; font-size: 14px; font-weight: 500; border: 0; border-radius: 6px;
+      background: var(--flexera-red); color: #fff; cursor: pointer; transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.9; }
+    button:disabled { background: #d1d5db; cursor: not-allowed; }
+    button.secondary { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .spinner {
+      display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
+      border-top-color: var(--flexera-red); border-radius: 50%; animation: spin 0.8s linear infinite;
+      vertical-align: middle; margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #status { margin-top: 20px; font-size: 12px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+    .error { color: #dc2626; }
     #frame { flex: 1; width: 100%; border: 0; display: none; }
+    .reauth-bar {
+      position: fixed; bottom: 12px; right: 12px; padding: 6px 10px; background: rgba(0,0,0,0.7);
+      color: #fff; font-size: 11px; border-radius: 4px; cursor: pointer; display: none; z-index: 10;
+    }
+    .hidden { display: none !important; }
   </style>
 </head>
 <body>
   <div id="shell">
-    <h1>C360 Analyst</h1>
-    <p>This launcher signs you into Databricks in a popup so the chat can load inside Teams. Click <b>Sign in</b> first. When the popup shows the C360 Analyst chat, close the popup — then click <b>Load chat</b>.</p>
-    <button id="signin">Sign in</button>
-    <button id="load" disabled>Load chat</button>
-    <div id="status">Initializing...</div>
+    <h1 id="title"><span class="spinner"></span>Loading C360 Analyst</h1>
+    <p id="message">Signing you in to Databricks. A popup window will appear shortly. After signing in, the popup will close automatically and the chat will load here.</p>
+    <div class="actions hidden" id="error-actions">
+      <button id="retry">Retry sign-in</button>
+      <button class="secondary" id="open-external">Open in browser</button>
+    </div>
+    <div id="status"></div>
   </div>
   <iframe id="frame" title="C360 Analyst"></iframe>
+  <div class="reauth-bar" id="reauth-bar" title="Sign in again">Re-authenticate</div>
+
   <script>
     const APP_URL = 'https://c360-chat-sandbox-ji-soo-yun-1132449496299224.aws.databricksapps.com/';
+    const AUTH_TTL_MS = 30 * 60 * 1000; // 30 min — skip popup if user authed within this window
+    const VERSION = 'launcher-v1.1.0';
+
     const $ = (id) => document.getElementById(id);
-    const log = (s) => { $('status').textContent += '\n' + new Date().toISOString().slice(11, 19) + ' ' + s; console.log('[launcher]', s); };
-    const setStatus = (s) => { $('status').textContent = s; console.log('[launcher]', s); };
+    const setTitle = (t, withSpinner = false) => {
+      $('title').innerHTML = (withSpinner ? '<span class="spinner"></span>' : '') + t;
+    };
+    const setMessage = (m, isError = false) => {
+      $('message').textContent = m;
+      $('message').className = isError ? 'error' : '';
+    };
+    const showErrorActions = (show) => $('error-actions').classList.toggle('hidden', !show);
+    const log = (s) => {
+      const t = new Date().toISOString().slice(11, 19);
+      $('status').textContent += (t + ' ' + s + '\n');
+      console.log('[launcher]', s);
+    };
 
-    let teamsReady = false;
+    const isLikelyAuthenticated = () => {
+      try {
+        const ts = parseInt(localStorage.getItem('c360_auth_ts') || '0', 10);
+        return ts > 0 && (Date.now() - ts) < AUTH_TTL_MS;
+      } catch { return false; }
+    };
+    const markAuthenticated = () => {
+      try { localStorage.setItem('c360_auth_ts', Date.now().toString()); } catch {}
+    };
+    const clearAuth = () => {
+      try { localStorage.removeItem('c360_auth_ts'); } catch {}
+    };
 
-    if (typeof microsoftTeams === 'undefined') {
-      setStatus('ERROR: Teams SDK failed to load (CDN blocked?).');
-    } else {
-      microsoftTeams.app.initialize().then(() => {
-        teamsReady = true;
-        return microsoftTeams.app.getContext();
-      }).then((ctx) => {
-        setStatus('Teams SDK ready. host=' + (ctx?.app?.host?.name || 'unknown') + ' clientType=' + (ctx?.app?.host?.clientType || 'unknown'));
-      }).catch((e) => {
-        setStatus('Teams init failed: ' + (e?.message || e));
-      });
-    }
+    const loadApp = () => {
+      markAuthenticated();
+      log('Loading iframe -> ' + APP_URL);
+      const frame = $('frame');
+      frame.onload = () => log('iframe load event fired');
+      frame.src = APP_URL;
+      frame.style.display = 'block';
+      $('shell').classList.add('hidden');
+      $('reauth-bar').style.display = 'block';
+    };
 
-    $('signin').onclick = () => {
-      if (!teamsReady) { log('Teams not ready; cannot open popup.'); return; }
-      log('Opening Databricks sign-in popup...');
+    const runAuthFlow = () => {
+      setTitle('Signing you in', true);
+      setMessage('Opening Databricks sign-in popup. After you sign in, the popup will close and the chat will load.');
+      showErrorActions(false);
+      log('Opening popup -> ' + APP_URL);
       microsoftTeams.authentication.authenticate({
         url: APP_URL,
         width: 800,
         height: 700,
         successCallback: (result) => {
-          log('Popup closed (successCallback): ' + (result || '(no result)'));
-          $('load').disabled = false;
+          log('Popup closed (success): ' + (result || '(no result)'));
+          loadApp();
         },
         failureCallback: (reason) => {
-          log('Popup closed (failureCallback): ' + (reason || '(no reason)'));
-          $('load').disabled = false;
+          log('Popup closed (failure): ' + (reason || '(no reason)'));
+          // Even on "failure" (user closed manually without notifySuccess), cookies may still be set.
+          // Attempt to load the app — if cookies aren't valid, user can retry.
+          loadApp();
         }
       });
     };
 
-    $('load').onclick = () => {
-      log('Loading iframe -> ' + APP_URL);
-      const frame = $('frame');
-      frame.onload = () => log('iframe load event fired');
-      frame.onerror = (e) => log('iframe error: ' + e);
-      frame.src = APP_URL;
-      frame.style.display = 'block';
-      $('shell').style.display = 'none';
+    const showFatalError = (msg) => {
+      setTitle('Couldn\'t load C360 Analyst');
+      setMessage(msg, true);
+      showErrorActions(true);
     };
+
+    $('retry').onclick = () => { clearAuth(); runAuthFlow(); };
+    $('open-external').onclick = () => {
+      microsoftTeams.app.openLink(APP_URL).catch(() => window.open(APP_URL, '_blank'));
+    };
+    $('reauth-bar').onclick = () => {
+      clearAuth();
+      $('frame').style.display = 'none';
+      $('shell').classList.remove('hidden');
+      $('reauth-bar').style.display = 'none';
+      runAuthFlow();
+    };
+
+    log(VERSION + ' loaded');
+
+    if (typeof microsoftTeams === 'undefined') {
+      showFatalError('Microsoft Teams SDK failed to load (CDN blocked?). Open in browser instead.');
+    } else {
+      microsoftTeams.app.initialize()
+        .then(() => microsoftTeams.app.getContext())
+        .then((ctx) => {
+          log('Teams ready. host=' + (ctx?.app?.host?.name || '?') + ' client=' + (ctx?.app?.host?.clientType || '?'));
+          if (isLikelyAuthenticated()) {
+            log('Recent auth detected — skipping popup.');
+            loadApp();
+          } else {
+            runAuthFlow();
+          }
+        })
+        .catch((e) => {
+          showFatalError('Teams SDK init failed: ' + (e?.message || e));
+        });
+    }
   </script>
 </body>
 </html>
