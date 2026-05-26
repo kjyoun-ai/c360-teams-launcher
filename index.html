@@ -66,7 +66,7 @@
     <p id="message">Checking your session&hellip;</p>
 
     <div class="note hidden" id="popup-instructions">
-      <strong>A sign-in window will appear.</strong> After you sign in to Databricks, <strong>close that window</strong> to return here &mdash; the chat will load automatically.
+      <strong>A sign-in window will appear.</strong> After you sign in to Databricks, the window will <strong>close automatically</strong> and the chat will load here.
     </div>
 
     <div class="actions hidden" id="landing-actions">
@@ -89,8 +89,9 @@
 
   <script>
     const APP_URL = 'https://c360-chat-sandbox-ji-soo-yun-1132449496299224.aws.databricksapps.com/';
+    const AUTH_COMPLETE_URL = APP_URL + 'teams-auth-complete.html';
     const AUTH_TTL_MS = 4 * 60 * 60 * 1000; // 4h — Databricks Apps cookies typically last longer
-    const VERSION = 'launcher-v1.2.0';
+    const VERSION = 'launcher-v1.3.0';
 
     const $ = (id) => document.getElementById(id);
     const show = (id, visible) => $(id).classList.toggle('hidden', !visible);
@@ -141,13 +142,13 @@
 
     const runAuthFlow = () => {
       setTitle('Opening sign-in window', true);
-      setMessage('Complete the Databricks sign-in in the popup, then close that window.', false);
+      setMessage('Complete the Databricks sign-in in the popup. It will close automatically.', false);
       show('landing-actions', false);
       show('popup-instructions', true);
       show('error-actions', false);
-      log('Opening popup -> ' + APP_URL);
+      log('Opening popup -> ' + AUTH_COMPLETE_URL);
       microsoftTeams.authentication.authenticate({
-        url: APP_URL,
+        url: AUTH_COMPLETE_URL,
         width: 800,
         height: 700,
         successCallback: (result) => {
