@@ -71,7 +71,6 @@
 
     <div class="actions hidden" id="landing-actions">
       <button id="signin">Sign in to Databricks</button>
-      <button class="secondary" id="continue">I&rsquo;m already signed in</button>
     </div>
 
     <div class="actions hidden" id="error-actions">
@@ -90,8 +89,11 @@
   <script>
     const APP_URL = 'https://c360-chat-prod-1614489967341714.aws.databricksapps.com/';
     const AUTH_COMPLETE_URL = APP_URL + 'teams-auth-complete.html';
-    const AUTH_TTL_MS = 4 * 60 * 60 * 1000; // 4h — Databricks Apps cookies typically last longer
-    const VERSION = 'launcher-v1.4.0';
+    // TTL controls how long the launcher skips the landing page on subsequent loads.
+    // 30 days is well past any reasonable session refresh cadence; the iframe itself
+    // will silently re-auth via Databricks Apps cookies as needed.
+    const AUTH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+    const VERSION = 'launcher-v1.5.0';
 
     const $ = (id) => document.getElementById(id);
     const show = (id, visible) => $(id).classList.toggle('hidden', !visible);
@@ -134,7 +136,7 @@
 
     const showLanding = () => {
       setTitle('Welcome to C360 Analyst', false);
-      setMessage('Sign in to Databricks to start chatting, or skip if you already have an active session.', false);
+      setMessage('Sign in to Databricks to start chatting. You’ll stay signed in for 30 days.', false);
       show('landing-actions', true);
       show('popup-instructions', false);
       show('error-actions', false);
@@ -173,7 +175,6 @@
     };
 
     $('signin').onclick = runAuthFlow;
-    $('continue').onclick = loadApp;
     $('retry').onclick = () => { clearAuth(); runAuthFlow(); };
     $('open-external').onclick = () => {
       microsoftTeams.app.openLink(APP_URL).catch(() => window.open(APP_URL, '_blank'));
