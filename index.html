@@ -88,10 +88,10 @@
   <div class="reauth-bar" id="reauth-bar" title="Sign in again">Re-authenticate</div>
 
   <script>
-    const APP_URL = 'https://c360-chat-sandbox-ji-soo-yun-1132449496299224.aws.databricksapps.com/';
+    const APP_URL = 'https://c360-chat-prod-1614489967341714.aws.databricksapps.com/';
     const AUTH_COMPLETE_URL = APP_URL + 'teams-auth-complete.html';
     const AUTH_TTL_MS = 4 * 60 * 60 * 1000; // 4h — Databricks Apps cookies typically last longer
-    const VERSION = 'launcher-v1.3.0';
+    const VERSION = 'launcher-v1.4.0';
 
     const $ = (id) => document.getElementById(id);
     const show = (id, visible) => $(id).classList.toggle('hidden', !visible);
