@@ -93,7 +93,7 @@
     // 30 days is well past any reasonable session refresh cadence; the iframe itself
     // will silently re-auth via Databricks Apps cookies as needed.
     const AUTH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-    const VERSION = 'launcher-v1.6.0';
+    const VERSION = 'launcher-v1.6.1';
 
     // After the iframe fires `load`, how long to wait for the app's ready ping
     // before concluding the iframe is on the Databricks login wall (not the
@@ -190,6 +190,10 @@
       log('Loading iframe -> ' + APP_URL);
       const frame = $('frame');
       frame.onload = () => {
+        // Teardown navigations (recovery sets frame.src='about:blank') also
+        // fire `load` and would arm a phantom watchdog that can interrupt the
+        // next legitimate load — ignore them.
+        if (frame.src === 'about:blank') return;
         log('iframe load event fired');
         // The login wall fires `load` too, so a successful onload isn't enough.
         // Wait briefly for the ready ping; its absence means we're not on the app.
