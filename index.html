@@ -93,7 +93,18 @@
     // 30 days is well past any reasonable session refresh cadence; the iframe itself
     // will silently re-auth via Databricks Apps cookies as needed.
     const AUTH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-    const VERSION = 'launcher-v1.5.0';
+    const VERSION = 'launcher-v1.6.0';
+
+    // After the iframe fires `load`, how long to wait for the app's ready ping
+    // before concluding the iframe is on the Databricks login wall (not the
+    // app) and auto-recovering. The app posts the ping inline the moment its
+    // HTML parses, so this only needs to absorb a little script-execution lag.
+    const APP_READY_TIMEOUT_MS = 6000;
+    const appOrigin = new URL(APP_URL).origin;
+    let appReady = false;
+    let watchdogTimer = null;
+    let autoRecoveryAttempts = 0;
+    const MAX_AUTO_RECOVERY = 1;
 
     const $ = (id) => document.getElementById(id);
     const show = (id, visible) => $(id).classList.toggle('hidden', !visible);
@@ -123,11 +134,67 @@
       try { localStorage.removeItem('c360_auth_ts'); } catch {}
     };
 
-    const loadApp = () => {
+    // The app's index.html posts this once it loads. Because the Databricks
+    // Apps proxy 302s unauthenticated requests to OAuth *before* serving any
+    // app HTML, receiving the ping is proof the session cookie is valid — so
+    // we (re)stamp the TTL only here, on a confirmed good load, never
+    // optimistically. The login wall lives on a different origin and never
+    // sends it, which is exactly how we tell the two apart.
+    window.addEventListener('message', (event) => {
+      if (event.origin !== appOrigin) return;
+      if (!event.data || event.data.type !== 'c360-app-ready') return;
+      log('App-ready ping received — session valid.');
+      appReady = true;
+      autoRecoveryAttempts = 0;
+      if (watchdogTimer) { clearTimeout(watchdogTimer); watchdogTimer = null; }
       markAuthenticated();
+    });
+
+    const showLandingAfterFailedLoad = () => {
+      $('frame').style.display = 'none';
+      $('frame').src = 'about:blank';
+      $('shell').classList.remove('hidden');
+      $('reauth-bar').style.display = 'none';
+    };
+
+    // Fires only when the iframe loaded but no ready ping arrived → the iframe
+    // is showing the Databricks login wall (or another non-app page). Recover
+    // automatically into the popup sign-in flow instead of stranding the user
+    // on a broken login screen that needs a manual Re-authenticate click.
+    const startReadyWatchdog = () => {
+      if (watchdogTimer) clearTimeout(watchdogTimer);
+      watchdogTimer = setTimeout(() => {
+        watchdogTimer = null;
+        if (appReady) return;
+        clearAuth();
+        if (autoRecoveryAttempts >= MAX_AUTO_RECOVERY) {
+          // Popup recovery already tried once and the app still didn't ping.
+          // Stop looping — fall back to the manual landing page.
+          log('No app-ready ping after recovery — showing landing for manual sign-in.');
+          showLandingAfterFailedLoad();
+          showLanding();
+          return;
+        }
+        autoRecoveryAttempts++;
+        log('No app-ready ping after load — assuming login wall. Auto-recovering via sign-in popup.');
+        $('frame').style.display = 'none';
+        $('frame').src = 'about:blank';
+        runAuthFlow();
+      }, APP_READY_TIMEOUT_MS);
+    };
+
+    const loadApp = () => {
+      // Don't stamp the TTL here — wait for the app-ready ping to confirm the
+      // load actually reached the app rather than the login wall.
+      appReady = false;
       log('Loading iframe -> ' + APP_URL);
       const frame = $('frame');
-      frame.onload = () => log('iframe load event fired');
+      frame.onload = () => {
+        log('iframe load event fired');
+        // The login wall fires `load` too, so a successful onload isn't enough.
+        // Wait briefly for the ready ping; its absence means we're not on the app.
+        if (!appReady) startReadyWatchdog();
+      };
       frame.src = APP_URL;
       frame.style.display = 'block';
       $('shell').classList.add('hidden');
@@ -174,14 +241,23 @@
       show('popup-instructions', false);
     };
 
-    $('signin').onclick = runAuthFlow;
-    $('retry').onclick = () => { clearAuth(); runAuthFlow(); };
+    // A manual user action is a fresh intent — cancel any pending watchdog and
+    // reset the auto-recovery budget so the popup flow is available again.
+    const resetRecoveryState = () => {
+      if (watchdogTimer) { clearTimeout(watchdogTimer); watchdogTimer = null; }
+      autoRecoveryAttempts = 0;
+    };
+
+    $('signin').onclick = () => { resetRecoveryState(); runAuthFlow(); };
+    $('retry').onclick = () => { resetRecoveryState(); clearAuth(); runAuthFlow(); };
     $('open-external').onclick = () => {
       microsoftTeams.app.openLink(APP_URL).catch(() => window.open(APP_URL, '_blank'));
     };
     $('reauth-bar').onclick = () => {
+      resetRecoveryState();
       clearAuth();
       $('frame').style.display = 'none';
+      $('frame').src = 'about:blank';
       $('shell').classList.remove('hidden');
       $('reauth-bar').style.display = 'none';
       showLanding();
