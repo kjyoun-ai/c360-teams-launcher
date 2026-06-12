@@ -96,7 +96,7 @@
     // 30 days is well past any reasonable session refresh cadence; the iframe itself
     // will silently re-auth via Databricks Apps cookies as needed.
     const AUTH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-    const VERSION = 'datachat-launcher-v1.1.0';
+    const VERSION = 'datachat-launcher-v1.1.1';
 
     // After the iframe fires `load`, how long to wait for the app's ready ping
     // before concluding the iframe is on the Databricks login wall (not the
@@ -287,7 +287,10 @@
           if (sub) {
             const sep = sub.indexOf('|');
             const agent = sep >= 0 ? sub.slice(0, sep) : sub;
-            const query = sep >= 0 ? sub.slice(sep + 1) : '';
+            // The question is URL-encoded inside subPageId (Teams drops
+            // sub-entity ids containing spaces); decode, tolerating raw text.
+            let query = sep >= 0 ? sub.slice(sep + 1) : '';
+            try { query = decodeURIComponent(query); } catch (_) { /* keep raw */ }
             const p = new URLSearchParams();
             if (agent) p.set('agent', agent);
             if (query) p.set('query', query);
