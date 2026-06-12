@@ -89,11 +89,14 @@
   <script>
     const APP_URL = 'https://c360-mchat-sandbox-ji-soo-yun-1132449496299224.aws.databricksapps.com/';
     const AUTH_COMPLETE_URL = APP_URL + 'teams-auth-complete.html';
+    // Query string forwarded into the app iframe when the tab was opened via a
+    // deep link (subPageId "agent|question") — see parsing in getContext below.
+    let deepLinkParams = '';
     // TTL controls how long the launcher skips the landing page on subsequent loads.
     // 30 days is well past any reasonable session refresh cadence; the iframe itself
     // will silently re-auth via Databricks Apps cookies as needed.
     const AUTH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-    const VERSION = 'datachat-launcher-v1.0.0';
+    const VERSION = 'datachat-launcher-v1.1.0';
 
     // After the iframe fires `load`, how long to wait for the app's ready ping
     // before concluding the iframe is on the Databricks login wall (not the
@@ -199,7 +202,7 @@
         // Wait briefly for the ready ping; its absence means we're not on the app.
         if (!appReady) startReadyWatchdog();
       };
-      frame.src = APP_URL;
+      frame.src = APP_URL + deepLinkParams;
       frame.style.display = 'block';
       $('shell').classList.add('hidden');
       $('reauth-bar').style.display = 'block';
@@ -276,6 +279,21 @@
         .then(() => microsoftTeams.app.getContext())
         .then((ctx) => {
           log('Teams ready. host=' + (ctx?.app?.host?.name || '?') + ' client=' + (ctx?.app?.host?.clientType || '?'));
+          // Deep links carry context.subEntityId -> ctx.page.subPageId.
+          // Format: "<agent-slug-or-alias>|<question>" (question optional).
+          // Forwarded to the app as ?agent=&query=; the app selects the agent
+          // and auto-sends the question.
+          const sub = ctx?.page?.subPageId || '';
+          if (sub) {
+            const sep = sub.indexOf('|');
+            const agent = sep >= 0 ? sub.slice(0, sep) : sub;
+            const query = sep >= 0 ? sub.slice(sep + 1) : '';
+            const p = new URLSearchParams();
+            if (agent) p.set('agent', agent);
+            if (query) p.set('query', query);
+            deepLinkParams = p.toString() ? '?' + p.toString() : '';
+            log('Deep link: agent=' + agent + ', query length=' + query.length);
+          }
           if (isLikelyAuthenticated()) {
             log('Recent auth detected (TTL valid) — loading app directly.');
             loadApp();
