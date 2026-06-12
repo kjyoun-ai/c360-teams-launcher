@@ -96,7 +96,7 @@
     // 30 days is well past any reasonable session refresh cadence; the iframe itself
     // will silently re-auth via Databricks Apps cookies as needed.
     const AUTH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-    const VERSION = 'datachat-launcher-v1.1.1';
+    const VERSION = 'datachat-launcher-v1.2.0';
 
     // After the iframe fires `load`, how long to wait for the app's ready ping
     // before concluding the iframe is on the Databricks login wall (not the
@@ -280,23 +280,40 @@
         .then((ctx) => {
           log('Teams ready. host=' + (ctx?.app?.host?.name || '?') + ' client=' + (ctx?.app?.host?.clientType || '?'));
           // Deep links carry context.subEntityId -> ctx.page.subPageId.
-          // Format: "<agent-slug-or-alias>|<question>" (question optional).
-          // Forwarded to the app as ?agent=&query=; the app selects the agent
-          // and auto-sends the question.
-          const sub = ctx?.page?.subPageId || '';
-          if (sub) {
+          // Format: "<agent-slug-or-alias>|<urlencoded-question>" (question
+          // optional; it is URL-encoded because Teams drops sub-entity ids
+          // containing spaces). Forwarded to the app as ?agent=&query=; the
+          // app selects the agent and auto-sends the question.
+          const parseSubPageId = (sub) => {
             const sep = sub.indexOf('|');
             const agent = sep >= 0 ? sub.slice(0, sep) : sub;
-            // The question is URL-encoded inside subPageId (Teams drops
-            // sub-entity ids containing spaces); decode, tolerating raw text.
             let query = sep >= 0 ? sub.slice(sep + 1) : '';
             try { query = decodeURIComponent(query); } catch (_) { /* keep raw */ }
             const p = new URLSearchParams();
             if (agent) p.set('agent', agent);
             if (query) p.set('query', query);
-            deepLinkParams = p.toString() ? '?' + p.toString() : '';
-            log('Deep link: agent=' + agent + ', query length=' + query.length);
+            return p.toString() ? '?' + p.toString() : '';
+          };
+          let lastSubPageId = ctx?.page?.subPageId || '';
+          if (lastSubPageId) {
+            deepLinkParams = parseSubPageId(lastSubPageId);
+            log('Deep link: ' + lastSubPageId.slice(0, 40));
           }
+          // Teams keeps recently-used personal tabs MOUNTED: a deep link
+          // clicked while this tab is alive never remounts the iframe, so the
+          // init-time context read above would silently miss it. Poll for a
+          // changed subPageId and reload the app with the new ask.
+          setInterval(() => {
+            microsoftTeams.app.getContext().then((c) => {
+              const cur = c?.page?.subPageId || '';
+              if (cur && cur !== lastSubPageId) {
+                lastSubPageId = cur;
+                deepLinkParams = parseSubPageId(cur);
+                log('Deep link while mounted: ' + cur.slice(0, 40) + ' — reloading app');
+                loadApp();
+              }
+            }).catch(() => { /* transient SDK hiccup; next tick retries */ });
+          }, 2000);
           if (isLikelyAuthenticated()) {
             log('Recent auth detected (TTL valid) — loading app directly.');
             loadApp();
