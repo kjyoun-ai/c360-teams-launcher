@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<!--
+  Meeting side-panel config page for the Flexera Data Chat configurableTab.
+  DEPLOY TO: kjyoun-ai/c360-teams-launcher  ->  data-chat/meeting-config.html
+  (referenced by manifest.bot.json > configurableTabs[0].configurationUrl)
+
+  v2 auto-detect (Gong pattern): asks the bot backend for this meeting's roster
+  (Graph, RSC-scoped via ChatMember.Read.Chat) and pre-fills the account from
+  the external participants' email domain — organizer just confirms. Falls back
+  to manual entry when RSC isn't consented yet (403), the call fails, or there
+  are no external participants. Saving stores the account in the content URL;
+  the side panel resolves it to the canonical account via lookup_ids_fuzzy and
+  pre-fires the Live Assist standing brief.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Flexera Data Chat — add to meeting</title>
+    <script src="https://res.cdn.office.net/teams-js/2.x/js/MicrosoftTeams.min.js"></script>
+    <style>
+      body { font-family: Segoe UI, system-ui, sans-serif; margin: 24px; color: #242424; }
+      .hint { color: #616161; font-size: 14px; }
+      .detect { margin: 14px 0 6px; font-size: 14px; }
+      .detect .ok { color: #107c10; font-weight: 600; }
+      .detect .dim { color: #616161; }
+      input[type="text"] {
+        width: 100%; max-width: 420px; padding: 8px 10px; font-size: 14px;
+        border: 1px solid #d1d1d1; border-radius: 4px; box-sizing: border-box;
+      }
+      label { display: block; font-size: 13px; color: #424242; margin: 10px 0 4px; }
+    </style>
+  </head>
+  <body>
+    <h3>Flexera Data Chat</h3>
+    <p class="hint">
+      Adds the live account brief (Live Assist — standing, ACV, renewal, risk in
+      under a minute) to this meeting's side panel. Click <b>Save</b>.
+    </p>
+    <div id="detect" class="detect"><span class="dim">Detecting account from participants…</span></div>
+    <label for="account">Account for this meeting</label>
+    <input id="account" type="text" placeholder="e.g. Broadcom" autocomplete="off" />
+    <script>
+      (function () {
+        var BOT_BASE = "https://t9u6rqyau5.us-east-1.awsapprunner.com";
+        var LAUNCHER = "https://kjyoun-ai.github.io/c360-teams-launcher/data-chat/";
+        var WEBSITE_URL = "https://c360-mchat-prod-1614489967341714.aws.databricksapps.com/";
+
+        var detectEl = document.getElementById("detect");
+        var accountEl = document.getElementById("account");
+
+        function contentUrl() {
+          var account = accountEl.value.trim();
+          var url = LAUNCHER + "?frame=sidePanel&agent=live-assist";
+          if (account) url += "&account=" + encodeURIComponent(account);
+          return url;
+        }
+
+        function manualFallback(msg) {
+          detectEl.innerHTML = '<span class="dim">' + msg + "</span>";
+        }
+
+        microsoftTeams.app.initialize().then(function () {
+          microsoftTeams.pages.config.registerOnSaveHandler(function (saveEvent) {
+            microsoftTeams.pages.config.setConfig({
+              entityId: "flexera-data-chat-meeting",
+              contentUrl: contentUrl(),
+              websiteUrl: WEBSITE_URL,
+              suggestedDisplayName: "Flexera Data Chat"
+            });
+            saveEvent.notifySuccess();
+          });
+          // Valid immediately — the account is optional (panel asks if absent).
+          microsoftTeams.pages.config.setValidityState(true);
+
+          // --- v2 auto-detect: roster -> external domain -> account seed ---
+          microsoftTeams.app.getContext().then(function (ctx) {
+            var chatId = ctx.chat && ctx.chat.id;
+            if (!chatId) return manualFallback("Type the account name (couldn't read meeting context).");
+            microsoftTeams.authentication.getAuthToken().then(function (token) {
+              fetch(BOT_BASE + "/api/meeting-context?chatId=" + encodeURIComponent(chatId), {
+                headers: { Authorization: "Bearer " + token }
+              })
+                .then(function (r) {
+                  if (r.status === 403) throw new Error("rsc");
+                  if (!r.ok) throw new Error("http " + r.status);
+                  return r.json();
+                })
+                .then(function (data) {
+                  var c = (data.candidates || [])[0];
+                  if (!c) return manualFallback("No external participants detected — type the account name.");
+                  if (!accountEl.value) accountEl.value = c.root;
+                  detectEl.innerHTML =
+                    '<span class="ok">Detected: ' + c.root + "</span> " +
+                    '<span class="dim">(' + c.participants + " participant" +
+                    (c.participants > 1 ? "s" : "") + " from @" + c.domain + ") — edit below if wrong</span>";
+                })
+                .catch(function (e) {
+                  manualFallback(
+                    e.message === "rsc"
+                      ? "Auto-detect activates after this app is added once (permissions consent). Type the account name."
+                      : "Auto-detect unavailable — type the account name."
+                  );
+                });
+            }).catch(function () {
+              manualFallback("Auto-detect unavailable — type the account name.");
+            });
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>
